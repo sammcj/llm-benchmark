@@ -1,0 +1,456 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LLM Benchmark Report</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page: #f9f9f7;
+    --surface: #fcfcfb;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted: #898781;
+    --grid: #e1e0d9;
+    --baseline: #c3c2b7;
+    --border: rgba(11, 11, 11, 0.10);
+    --series-1: #2a78d6;
+    --delta-good: #006300;
+    --delta-bad: #d03b3b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --page: #0d0d0d;
+      --surface: #1a1a19;
+      --text-primary: #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted: #898781;
+      --grid: #2c2c2a;
+      --baseline: #383835;
+      --border: rgba(255, 255, 255, 0.10);
+      --series-1: #3987e5;
+      --delta-good: #0ca30c;
+      --delta-bad: #e66767;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--page);
+    color: var(--text-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 14px;
+    line-height: 1.45;
+  }
+  main { max-width: 1200px; margin: 0 auto; padding: 24px 20px 64px; }
+  h1 { font-size: 20px; font-weight: 650; margin: 0 0 4px; }
+  .subtitle { color: var(--text-secondary); margin: 0 0 20px; }
+  .filters {
+    display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end;
+    margin-bottom: 20px;
+  }
+  .filters label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-secondary); }
+  .filters select {
+    font: inherit; color: var(--text-primary);
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 6px; padding: 5px 8px; min-width: 130px;
+  }
+  .charts { display: grid; grid-template-columns: repeat(auto-fill, minmax(480px, 1fr)); gap: 16px; }
+  @media (max-width: 560px) { .charts { grid-template-columns: 1fr; } }
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 16px 18px; overflow-x: auto;
+  }
+  .card h2 { font-size: 14px; font-weight: 600; margin: 0 0 2px; }
+  .card .unit { color: var(--text-muted); font-size: 12px; margin: 0 0 10px; }
+  svg { display: block; }
+  svg text { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .runlabel { fill: var(--text-secondary); font-size: 12px; }
+  .vallabel { fill: var(--text-primary); font-size: 12px; font-weight: 600; }
+  .tick { fill: var(--text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .bar-hit:hover + .bar-mark, .bar-hit:focus-visible + .bar-mark { filter: brightness(1.12); }
+  .bar-hit { outline: none; }
+  #tooltip {
+    position: fixed; pointer-events: none; z-index: 10; display: none;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    padding: 8px 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.18); max-width: 340px;
+  }
+  #tooltip .tt-value { font-size: 16px; font-weight: 650; }
+  #tooltip .tt-label { color: var(--text-secondary); font-size: 12px; }
+  #tooltip .tt-extra { color: var(--text-muted); font-size: 12px; margin-top: 4px; white-space: pre-line; }
+  .tablecard { margin-top: 16px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: right; padding: 6px 10px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+  th { color: var(--text-secondary); font-weight: 600; position: sticky; top: 0; background: var(--surface); }
+  th:first-child, td:first-child, th.left, td.left { text-align: left; }
+  td { font-variant-numeric: tabular-nums; color: var(--text-primary); }
+  td.left { color: var(--text-secondary); }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover { background: color-mix(in srgb, var(--series-1) 7%, transparent); }
+  tr.detail td { text-align: left; cursor: default; }
+  tr.detail pre {
+    margin: 6px 0; padding: 10px; font-size: 11.5px; overflow-x: auto;
+    background: var(--page); border: 1px solid var(--border); border-radius: 8px;
+  }
+  .empty { color: var(--text-muted); padding: 24px 0; }
+  .comparecard { margin-bottom: 16px; }
+  .comparecard .pickers { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+  .comparecard table { width: auto; min-width: 520px; }
+  .comparecard td.metric { text-align: left; color: var(--text-secondary); }
+  .delta { font-weight: 600; }
+  .delta.good { color: var(--delta-good); }
+  .delta.bad { color: var(--delta-bad); }
+  .delta.flat { color: var(--text-muted); }
+  .cfgdiff {
+    margin: 12px 0 0; font-size: 12.5px;
+    display: grid; grid-template-columns: fit-content(380px) 1fr; gap: 3px 18px;
+    max-width: 900px;
+  }
+  .cfgdiff dt { color: var(--text-muted); overflow-wrap: anywhere; }
+  .cfgdiff dd { margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<main>
+  <h1>LLM Benchmark Report</h1>
+  <p class="subtitle" id="subtitle"></p>
+  <div class="filters" id="filters">
+    <label>Model <select id="f-model"></select></label>
+    <label>Backend <select id="f-backend"></select></label>
+    <label>Concurrency <select id="f-concurrency"></select></label>
+  </div>
+  <div class="card comparecard">
+    <h2>Compare two runs</h2>
+    <p class="unit">B is measured against A - green means B is better</p>
+    <div class="pickers">
+      <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--text-secondary)">Run A <select id="cmp-a"></select></label>
+      <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--text-secondary)">Run B <select id="cmp-b"></select></label>
+    </div>
+    <div id="cmp-body"></div>
+  </div>
+  <div class="charts" id="charts"></div>
+  <div class="card tablecard">
+    <h2>All runs</h2>
+    <p class="unit">Click a row for the full result JSON</p>
+    <div style="overflow-x:auto"><table id="runtable"></table></div>
+  </div>
+</main>
+<div id="tooltip"></div>
+<script>
+"use strict";
+const DATA = __DATA__;
+
+const num = (v) => (typeof v === "number" && isFinite(v) ? v : null);
+const get = (obj, path) => path.split(".").reduce((o, k) => (o == null ? null : o[k]), obj);
+
+function enrich(run) {
+  const sm = run.server_metrics || {};
+  return {
+    run,
+    ts: run._timestamp || "",
+    model: run.model || "?",
+    backend: get(run, "server.backend") || "unknown",
+    concurrency: run.concurrency,
+    requests: run.total_requests,
+    ok: run.successful_requests,
+    outTokens: run.total_output_tokens,
+    client: num(get(run, "summary.client_tokens_per_second_p50")) ?? num(get(run, "decode_tokens_per_second.p50")),
+    clientP95: num(get(run, "decode_tokens_per_second.p95")),
+    aggregate: num(get(run, "summary.aggregate_tokens_per_second")) ?? num(run.aggregate_output_tokens_per_second),
+    ttftMs: (num(get(run, "summary.time_to_first_token_p50")) ?? num(get(run, "time_to_first_token.p50"))) * 1000 || null,
+    ttftP95Ms: num(get(run, "time_to_first_token.p95")) * 1000 || null,
+    latency: num(get(run, "summary.latency_p50")) ?? num(get(run, "latency.p50")),
+    latencyP95: num(get(run, "latency.p95")),
+    cachePct: num(get(sm, "prefix_cache.hit_rate")) != null ? sm.prefix_cache.hit_rate * 100 : null,
+    acceptLen: num(get(sm, "speculative_decoding.mean_acceptance_length")),
+  };
+}
+const RUNS = DATA.map(enrich);
+
+function label(r) {
+  const model = r.model.length > 22 ? r.model.slice(0, 21) + "…" : r.model;
+  return `${r.ts.slice(5, 16)}  ${model}  c${r.concurrency}`;
+}
+
+const fmt1 = (v) => v.toLocaleString(undefined, { maximumFractionDigits: 1 });
+const fmt2 = (v) => v.toLocaleString(undefined, { maximumFractionDigits: 2 });
+const METRICS = [
+  { title: "Client tokens/s", unit: "per-stream decode rate, p50 - higher is better", value: (r) => r.client, fmt: fmt1, dir: 1,
+    extra: (r) => r.clientP95 != null ? `p95: ${fmt1(r.clientP95)} tok/s` : "" },
+  { title: "Aggregate tokens/s", unit: "total output throughput across streams - higher is better", value: (r) => r.aggregate, fmt: fmt1, dir: 1,
+    extra: (r) => `${r.outTokens?.toLocaleString() ?? "?"} output tokens over ${fmt1(r.run.total_time)} s` },
+  { title: "Time to first token", unit: "milliseconds, p50 - lower is better", value: (r) => r.ttftMs, fmt: fmt1, dir: -1,
+    extra: (r) => r.ttftP95Ms != null ? `p95: ${fmt1(r.ttftP95Ms)} ms` : "" },
+  { title: "Request latency", unit: "seconds, p50 - lower is better", value: (r) => r.latency, fmt: fmt2, dir: -1,
+    extra: (r) => r.latencyP95 != null ? `p95: ${fmt2(r.latencyP95)} s` : "" },
+  { title: "Prefix cache hit rate", unit: "percent of queried prompt tokens served from cache", value: (r) => r.cachePct, fmt: fmt1, dir: 1,
+    extra: (r) => { const pc = get(r.run, "server_metrics.prefix_cache"); return pc ? `${pc.hit_tokens?.toLocaleString()} of ${pc.queried_tokens?.toLocaleString()} tokens` : ""; } },
+  { title: "Speculative decoding acceptance", unit: "mean accepted tokens per draft step (incl. bonus token)", value: (r) => r.acceptLen, fmt: fmt2, dir: 1,
+    extra: (r) => { const sd = get(r.run, "server_metrics.speculative_decoding"); return sd ? `draft acceptance: ${(sd.draft_acceptance_rate * 100).toFixed(1)}%` : ""; } },
+];
+
+function niceTicks(max, count = 4) {
+  const raw = max / count;
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= raw) || raw;
+  const top = Math.ceil((max - 1e-9) / step) * step;
+  const ticks = [];
+  for (let v = 0; v <= top + 1e-9; v += step) ticks.push(v);
+  return ticks;
+}
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+function el(name, attrs, parent) {
+  const node = document.createElementNS(SVG_NS, name);
+  for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+  if (parent) parent.appendChild(node);
+  return node;
+}
+
+const tooltip = document.getElementById("tooltip");
+function showTooltip(evt, valueText, labelText, extraText) {
+  tooltip.replaceChildren();
+  const v = document.createElement("div"); v.className = "tt-value"; v.textContent = valueText;
+  const l = document.createElement("div"); l.className = "tt-label"; l.textContent = labelText;
+  tooltip.append(v, l);
+  if (extraText) { const x = document.createElement("div"); x.className = "tt-extra"; x.textContent = extraText; tooltip.append(x); }
+  tooltip.style.display = "block";
+  const pad = 14, tw = tooltip.offsetWidth, th = tooltip.offsetHeight;
+  let x = evt.clientX + pad, y = evt.clientY + pad;
+  if (x + tw > window.innerWidth - 8) x = evt.clientX - tw - pad;
+  if (y + th > window.innerHeight - 8) y = evt.clientY - th - pad;
+  tooltip.style.left = x + "px"; tooltip.style.top = y + "px";
+}
+const hideTooltip = () => { tooltip.style.display = "none"; };
+
+// Bar path: square at the baseline, 4px rounded data end
+function barPath(x, y, w, h) {
+  const r = Math.min(4, w);
+  return `M${x},${y} h${w - r} a${r},${r} 0 0 1 ${r},${r} v${h - 2 * r} a${r},${r} 0 0 1 -${r},${r} h-${w - r} Z`;
+}
+
+function renderChart(metric, runs) {
+  const rows = runs.map((r) => ({ r, v: metric.value(r) })).filter((d) => d.v != null);
+  if (!rows.length) return null;
+
+  const card = document.createElement("div");
+  card.className = "card";
+  const h2 = document.createElement("h2"); h2.textContent = metric.title;
+  const unit = document.createElement("p"); unit.className = "unit"; unit.textContent = metric.unit;
+  card.append(h2, unit);
+
+  const gutter = 265, rowH = 30, barH = 18, axisH = 22, plotW = 370;
+  const width = gutter + plotW + 80, height = rows.length * rowH + axisH;
+  const svg = el("svg", { viewBox: `0 0 ${width} ${height}`, width: "100%", role: "img" });
+  svg.style.minWidth = "560px";
+
+  const max = Math.max(...rows.map((d) => d.v));
+  const ticks = niceTicks(max);
+  const scale = plotW / (ticks[ticks.length - 1] || 1);
+
+  for (const t of ticks) {
+    const x = gutter + t * scale;
+    el("line", { x1: x, y1: 0, x2: x, y2: rows.length * rowH, stroke: "var(--grid)", "stroke-width": 1 }, svg);
+    const tickText = el("text", { x, y: rows.length * rowH + 15, "text-anchor": "middle", class: "tick" }, svg);
+    tickText.textContent = fmt1(t);
+  }
+  el("line", { x1: gutter, y1: 0, x2: gutter, y2: rows.length * rowH, stroke: "var(--baseline)", "stroke-width": 1 }, svg);
+
+  rows.forEach((d, i) => {
+    const y = i * rowH + (rowH - barH) / 2;
+    const w = Math.max(d.v * scale, 1);
+    const runLabel = el("text", { x: gutter - 10, y: y + barH / 2 + 4, "text-anchor": "end", class: "runlabel" }, svg);
+    runLabel.textContent = label(d.r);
+
+    const hit = el("rect", { x: 0, y: i * rowH, width, height: rowH, fill: "transparent", class: "bar-hit", tabindex: 0 }, svg);
+    el("path", { d: barPath(gutter, y, w, barH), fill: "var(--series-1)", class: "bar-mark", "pointer-events": "none" }, svg);
+    const val = el("text", { x: gutter + w + 8, y: y + barH / 2 + 4, class: "vallabel" }, svg);
+    val.textContent = metric.fmt(d.v);
+
+    const details = [metric.extra(d.r), `${d.r.ok}/${d.r.requests} requests, ${d.r.run.max_output_tokens} max tokens${d.r.run.use_long_context ? ", long context" : ""}`]
+      .filter(Boolean).join("\n");
+    const onShow = (evt) => showTooltip(evt, `${metric.fmt(d.v)}`, label(d.r), details);
+    hit.addEventListener("pointermove", onShow);
+    hit.addEventListener("pointerleave", hideTooltip);
+    hit.addEventListener("focus", (e) => { const b = hit.getBoundingClientRect(); showTooltip({ clientX: b.right - 80, clientY: b.top + 10 }, metric.fmt(d.v), label(d.r), details); });
+    hit.addEventListener("blur", hideTooltip);
+  });
+
+  card.appendChild(svg);
+  return card;
+}
+
+const COLS = [
+  { h: "Run", left: true, cell: (r) => r.ts },
+  { h: "Model", left: true, cell: (r) => r.model },
+  { h: "Backend", left: true, cell: (r) => r.backend },
+  { h: "Conc.", cell: (r) => r.concurrency },
+  { h: "Reqs", cell: (r) => `${r.ok}/${r.requests}` },
+  { h: "Client tok/s p50", cell: (r) => r.client != null ? fmt1(r.client) : "-" },
+  { h: "Agg tok/s", cell: (r) => r.aggregate != null ? fmt1(r.aggregate) : "-" },
+  { h: "TTFT p50 ms", cell: (r) => r.ttftMs != null ? fmt1(r.ttftMs) : "-" },
+  { h: "Latency p50 s", cell: (r) => r.latency != null ? fmt2(r.latency) : "-" },
+  { h: "Cache hit %", cell: (r) => r.cachePct != null ? fmt1(r.cachePct) : "-" },
+  { h: "Accept len", cell: (r) => r.acceptLen != null ? fmt2(r.acceptLen) : "-" },
+];
+
+function renderTable(runs) {
+  const table = document.getElementById("runtable");
+  table.replaceChildren();
+  const thead = document.createElement("thead");
+  const hr = document.createElement("tr");
+  for (const c of COLS) { const th = document.createElement("th"); th.textContent = c.h; if (c.left) th.className = "left"; hr.appendChild(th); }
+  thead.appendChild(hr); table.appendChild(thead);
+  const tbody = document.createElement("tbody");
+  for (const r of runs) {
+    const tr = document.createElement("tr");
+    for (const c of COLS) { const td = document.createElement("td"); td.textContent = String(c.cell(r)); if (c.left) td.className = "left"; tr.appendChild(td); }
+    tr.addEventListener("click", () => {
+      const next = tr.nextElementSibling;
+      if (next && next.classList.contains("detail")) { next.remove(); return; }
+      const dtr = document.createElement("tr"); dtr.className = "detail";
+      const td = document.createElement("td"); td.colSpan = COLS.length;
+      const pre = document.createElement("pre"); pre.textContent = JSON.stringify(r.run, null, 2);
+      td.appendChild(pre); dtr.appendChild(td);
+      tr.after(dtr);
+    });
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+}
+
+function flatten(obj, prefix, out) {
+  for (const [k, v] of Object.entries(obj || {})) {
+    if (k.startsWith("_")) continue;
+    const key = prefix ? `${prefix}.${k}` : k;
+    if (v !== null && typeof v === "object" && !Array.isArray(v)) flatten(v, key, out);
+    else out[key] = Array.isArray(v) ? JSON.stringify(v) : v;
+  }
+  return out;
+}
+
+const CONFIG_KEYS = ["model", "concurrency", "total_requests", "max_output_tokens", "request_timeout", "use_long_context", "server"];
+function configOf(run) {
+  const cfg = {};
+  for (const k of CONFIG_KEYS) if (k in run) cfg[k] = run[k];
+  return flatten(cfg, "", {});
+}
+
+function renderCompare() {
+  const body = document.getElementById("cmp-body");
+  body.replaceChildren();
+  const ia = +document.getElementById("cmp-a").value, ib = +document.getElementById("cmp-b").value;
+  const a = RUNS[ia], b = RUNS[ib];
+  if (!a || !b) return;
+
+  const table = document.createElement("table");
+  const thead = document.createElement("thead");
+  const hr = document.createElement("tr");
+  for (const h of ["Metric", "A", "B", "Change"]) {
+    const th = document.createElement("th");
+    th.textContent = h;
+    if (h === "Metric") th.className = "left";
+    hr.appendChild(th);
+  }
+  thead.appendChild(hr); table.appendChild(thead);
+  const tbody = document.createElement("tbody");
+  for (const m of METRICS) {
+    const va = m.value(a), vb = m.value(b);
+    const tr = document.createElement("tr"); tr.style.cursor = "default";
+    const name = document.createElement("td"); name.className = "metric"; name.textContent = m.title;
+    const tda = document.createElement("td"); tda.textContent = va != null ? m.fmt(va) : "-";
+    const tdb = document.createElement("td"); tdb.textContent = vb != null ? m.fmt(vb) : "-";
+    const tdd = document.createElement("td");
+    if (va != null && vb != null && va !== 0) {
+      const pct = ((vb - va) / Math.abs(va)) * 100;
+      const better = pct * m.dir > 0;
+      const span = document.createElement("span");
+      span.className = "delta " + (Math.abs(pct) < 0.5 ? "flat" : better ? "good" : "bad");
+      const arrow = Math.abs(pct) < 0.5 ? "=" : pct > 0 ? "▲" : "▼";
+      const word = Math.abs(pct) < 0.5 ? "" : better ? " better" : " worse";
+      span.textContent = `${arrow} ${Math.abs(pct).toFixed(1)}%${word}`;
+      tdd.appendChild(span);
+    } else {
+      tdd.textContent = "-";
+    }
+    tr.append(name, tda, tdb, tdd);
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  body.appendChild(table);
+
+  const ca = configOf(a.run), cb = configOf(b.run);
+  const keys = [...new Set([...Object.keys(ca), ...Object.keys(cb)])].filter((k) => String(ca[k]) !== String(cb[k])).sort();
+  const heading = document.createElement("p");
+  heading.className = "unit";
+  heading.style.marginTop = "14px";
+  if (!keys.length) {
+    heading.textContent = "Identical configuration - differences are run-to-run variance.";
+    body.appendChild(heading);
+  } else {
+    heading.textContent = "Configuration differences (A → B)";
+    body.appendChild(heading);
+    const dl = document.createElement("dl"); dl.className = "cfgdiff";
+    for (const k of keys) {
+      const dt = document.createElement("dt"); dt.textContent = k;
+      const dd = document.createElement("dd"); dd.textContent = `${ca[k] ?? "(absent)"} → ${cb[k] ?? "(absent)"}`;
+      dl.append(dt, dd);
+    }
+    body.appendChild(dl);
+  }
+}
+
+function fillCompareSelect(id, defaultIndex) {
+  const sel = document.getElementById(id);
+  sel.replaceChildren();
+  RUNS.forEach((r, i) => {
+    const o = document.createElement("option");
+    o.value = String(i);
+    o.textContent = `${r.ts}  ${r.model}  c${r.concurrency}`;
+    sel.appendChild(o);
+  });
+  sel.value = String(defaultIndex);
+  sel.addEventListener("change", renderCompare);
+}
+
+function fillSelect(id, values) {
+  const sel = document.getElementById(id);
+  const all = document.createElement("option"); all.value = ""; all.textContent = "All";
+  sel.replaceChildren(all);
+  for (const v of values) { const o = document.createElement("option"); o.value = String(v); o.textContent = String(v); sel.appendChild(o); }
+  sel.addEventListener("change", render);
+}
+fillSelect("f-model", [...new Set(RUNS.map((r) => r.model))].sort());
+fillSelect("f-backend", [...new Set(RUNS.map((r) => r.backend))].sort());
+fillSelect("f-concurrency", [...new Set(RUNS.map((r) => r.concurrency))].sort((a, b) => a - b));
+
+function filtered() {
+  const m = document.getElementById("f-model").value;
+  const b = document.getElementById("f-backend").value;
+  const c = document.getElementById("f-concurrency").value;
+  return RUNS.filter((r) => (!m || r.model === m) && (!b || r.backend === b) && (!c || String(r.concurrency) === c));
+}
+
+function render() {
+  const runs = filtered();
+  document.getElementById("subtitle").textContent =
+    `${runs.length} of ${RUNS.length} runs` + (RUNS.length ? ` · ${RUNS[0].ts.slice(0, 10)} to ${RUNS[RUNS.length - 1].ts.slice(0, 10)}` : "");
+  const charts = document.getElementById("charts");
+  charts.replaceChildren();
+  if (!runs.length) {
+    const p = document.createElement("p"); p.className = "empty"; p.textContent = "No runs match the current filters.";
+    charts.appendChild(p);
+  } else {
+    for (const metric of METRICS) { const card = renderChart(metric, runs); if (card) charts.appendChild(card); }
+  }
+  renderTable(runs);
+}
+fillCompareSelect("cmp-a", Math.max(0, RUNS.length - 2));
+fillCompareSelect("cmp-b", RUNS.length - 1);
+renderCompare();
+render();
+</script>
+</body>
+</html>
