@@ -49,6 +49,9 @@ Every saved run rebuilds `benchmark_results/report.html`: a self-contained stati
 
 Build it manually with `uv run generate_report.py --open` (`--results_dir` and `--output` override the defaults).
 
+![screenshot-1](screenshots/screenshot-1.jpg)
+![screenshot-2](screenshots/screenshot-2.jpg)
+
 ## License
 
 Apache 2.0 - see [LICENSE](LICENSE).
