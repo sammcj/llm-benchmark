@@ -17,6 +17,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from openai import AsyncOpenAI
@@ -147,6 +148,15 @@ def server_base_url(api_url: str) -> str:
     return api_url.rstrip("/").removesuffix("/v1")
 
 
+def endpoint_label(api_url: str) -> str:
+    """Identifies which server a run hit, with any user:pass in the URL dropped."""
+    parts = urlsplit(server_base_url(api_url))
+    if not parts.hostname:
+        return api_url
+    netloc = parts.hostname + (f":{parts.port}" if parts.port else "")
+    return urlunsplit((parts.scheme, netloc, parts.path, "", ""))
+
+
 def parse_vllm_metrics(text: str) -> dict[str, float]:
     """Sum samples by metric name across engines; per-position samples keyed as name[pos]."""
     metrics: dict[str, float] = {}
@@ -210,7 +220,7 @@ async def fetch_json(url: str, api_key: str | None) -> dict | None:
 
 async def fetch_server_info(backend: str | None, base_url: str, metrics_url: str | None, api_key: str | None, metrics_text: str | None) -> dict:
     """Engine settings observable over HTTP; full CLI args are only in the server's startup log."""
-    info: dict = {"backend": backend}
+    info: dict = {"backend": backend, "endpoint": endpoint_label(base_url)}
     if backend == "vllm":
         version = await fetch_json(f"{base_url}/version", api_key)
         info["vllm_version"] = version.get("version") if version else None
