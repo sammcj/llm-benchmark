@@ -180,7 +180,9 @@ const METRICS = [
   { title: "Client tokens/s", unit: "per-stream decode rate, p50 - higher is better", value: (r) => r.client, fmt: fmt1, dir: 1,
     extra: (r) => r.clientP95 != null ? `p95: ${fmt1(r.clientP95)} tok/s` : "" },
   { title: "Aggregate tokens/s", unit: "total output throughput across streams - higher is better", value: (r) => r.aggregate, fmt: fmt1, dir: 1,
-    extra: (r) => `${r.outTokens?.toLocaleString() ?? "?"} output tokens over ${fmt1(r.run.total_time)} s` },
+    extra: (r) => { const w = num(r.run.all_streams_busy_window);
+      return w ? `measured over ${fmt1(w)} s with all ${r.concurrency} streams busy`
+               : `${r.outTokens?.toLocaleString() ?? "?"} output tokens over ${fmt1(r.run.total_time)} s`; } },
   { title: "Time to first token", unit: "milliseconds, p50 - lower is better", value: (r) => r.ttftMs, fmt: fmt1, dir: -1,
     extra: (r) => r.ttftP95Ms != null ? `p95: ${fmt1(r.ttftP95Ms)} ms` : "" },
   { title: "Request latency", unit: "seconds, p50 - lower is better", value: (r) => r.latency, fmt: fmt2, dir: -1,

@@ -12,6 +12,7 @@ import logging
 import math
 import random
 import re
+import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -23,6 +24,11 @@ from openai import AsyncOpenAI
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("llm_benchmark")
+
+
+def bold(text: str) -> str:
+    # Skipped when stderr is redirected so piped logs stay free of escape codes
+    return f"\033[1m{text}\033[0m" if sys.stderr.isatty() else text
 
 SHORT_PROMPTS = [
     "Explain the concept of artificial intelligence in simple terms.",
@@ -126,6 +132,9 @@ class RequestResult:
     latency: float
     ttft: float
     decode_tps: float
+    start: float
+    first_token: float
+    end: float
 
 
 _METRIC_LINE = re.compile(r"^((?:vllm|llamacpp):[A-Za-z0-9_]+)(?:\{(.*?)\})?\s+([0-9.eE+-]+)\s*$")
@@ -309,7 +318,7 @@ async def make_request(client: AsyncOpenAI, model: str, output_tokens: int, requ
         ttft = (first_token_at - start) if first_token_at else latency
         decode_time = (end - first_token_at) if first_token_at else latency
         decode_tps = completion_tokens / decode_time if decode_time > 0 else 0.0
-        return RequestResult(completion_tokens, latency, ttft, decode_tps)
+        return RequestResult(completion_tokens, latency, ttft, decode_tps, start, first_token_at or start, end)
 
     except TimeoutError:
         log.warning(f"Request timed out after {request_timeout} seconds")
@@ -403,7 +412,9 @@ async def run_benchmark(num_requests, concurrency, request_timeout, output_token
     latency = summarise([r.latency for r in results])
     decode_tps = summarise([r.decode_tps for r in results], reverse=True)
     ttft = summarise([r.ttft for r in results])
-    aggregate_tps = total_output_tokens / total_elapsed if total_elapsed > 0 else 0
+    wall_clock_tps = total_output_tokens / total_elapsed if total_elapsed > 0 else 0
+    steady = all_streams_busy_tps(results, concurrency)
+    aggregate_tps = steady[0] if steady else wall_clock_tps
     return {
         "model": model,
         # The client-experienced numbers: per-stream decode rate and TTFT
@@ -424,11 +435,40 @@ async def run_benchmark(num_requests, concurrency, request_timeout, output_token
         "requests_per_second": len(results) / total_elapsed if total_elapsed > 0 else 0,
         "total_output_tokens": total_output_tokens,
         "aggregate_output_tokens_per_second": aggregate_tps,
+        "all_streams_busy_window": steady[1] if steady else None,
+        "wall_clock_output_tokens_per_second": wall_clock_tps,
         "latency": latency,
         "decode_tokens_per_second": decode_tps,
         "time_to_first_token": ttft,
         "server_metrics": server_metrics_delta(backend, metrics_before, metrics_after),
     }
+
+
+def all_streams_busy_tps(results: list[RequestResult], concurrency: int) -> tuple[float, float] | None:
+    """Output throughput over the window where every stream was in flight at once.
+
+    Wall-clock aggregate charges the run for the tail where fewer than `concurrency`
+    requests are in flight, which understates what the server sustains. The window
+    runs from the last of the first `concurrency` starts to the first of the final
+    `concurrency` completions; each request's tokens are prorated across its decode
+    interval (per-token timestamps are not available from a streamed response).
+    """
+    if concurrency < 2 or len(results) <= concurrency:
+        return None
+    window_start = max(sorted(r.start for r in results)[:concurrency])
+    window_end = min(sorted(r.end for r in results)[-concurrency:])
+    window = window_end - window_start
+    if window <= 0:
+        return None
+    tokens = 0.0
+    for r in results:
+        decode_time = r.end - r.first_token
+        if decode_time <= 0:
+            continue
+        overlap = min(r.end, window_end) - max(r.first_token, window_start)
+        if overlap > 0:
+            tokens += r.output_tokens * overlap / decode_time
+    return tokens / window, window
 
 
 def print_results(results):
@@ -464,11 +504,17 @@ def main() -> None:
     if results["successful_requests"] == 0:
         log.error("All requests failed; no summary to report")
         return
-    log.info(
-        f"Client tokens/s (p50): {s['client_tokens_per_second_p50']:.1f} | "
-        f"aggregate: {s['aggregate_tokens_per_second']:.1f} | "
-        f"TTFT p50: {s['time_to_first_token_p50'] * 1000:.0f} ms"
-    )
+    conc = results["concurrency"]
+    parts = [f"Per-stream (p50): {s['client_tokens_per_second_p50']:.1f} tk/s"]
+    if conc > 1:
+        window = " (excl. ramp-up/drain)" if results["all_streams_busy_window"] else ""
+        parts.append(f"combined across {conc} streams: {s['aggregate_tokens_per_second']:.1f} tk/s{window}")
+    # The headline is the combined figure under load, the per-stream rate on a single stream
+    parts[-1] = bold(parts[-1])
+    parts.append(f"TTFT p50: {s['time_to_first_token_p50'] * 1000:.0f} ms")
+    parts.append(f"max output: {results['max_output_tokens']} tokens")
+    parts.append(results["model"])
+    log.info(" | ".join(parts))
     if not args.no_save:
         saved = save_results(results)
         log.info(f"Results saved to {saved}")
